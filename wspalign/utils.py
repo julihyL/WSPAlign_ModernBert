@@ -317,7 +317,21 @@ class CacheDataReader():
             s.__del__(self)
 
     def get_item(self, index):
-        return tuple(self.dataset_group[key][index] for key in self.data_keys)
+        items = []
+
+        for key in self.data_keys:
+            value = self.dataset_group[key][index]
+
+            # h5py returns boolean scalars as numpy.bool_.
+            # PyTorch DataLoader cannot collate them directly.
+            # The original SQuAD implementation represents
+            # is_impossible as a float tensor.
+            if isinstance(value, (np.bool_, bool)):
+                value = np.float32(value)
+
+            items.append(value)
+
+        return tuple(items)
 
     def get_size(self):
         return self.dataset_group.attrs["size"]
