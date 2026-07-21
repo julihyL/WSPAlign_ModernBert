@@ -27,23 +27,25 @@ import logging
 import os
 import random
 import timeit
+import time 
 
 import numpy as np
 import torch
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
 from torch.utils.data.distributed import DistributedSampler
+from torch.optim import AdamW
 from tqdm import tqdm, trange
 
 import transformers
 from transformers import (
     MODEL_FOR_QUESTION_ANSWERING_MAPPING,
     WEIGHTS_NAME,
-    AdamW,
     AutoConfig,
     AutoModelForQuestionAnswering,
     AutoTokenizer,
     get_linear_schedule_with_warmup,
 )
+
 from squad_metrics import (
     compute_predictions_log_probs,
     compute_predictions_logits,
@@ -206,7 +208,7 @@ def train(args, train_dataset, model, tokenizer):
                 "end_positions": batch[4],
             }
             
-            if args.model_type in ["xlm", "roberta", "distilbert", "camembert", "bart", "longformer"]:
+            if args.model_type in ["xlm", "roberta", "distilbert", "camembert", "bart", "longformer", "modernbert"]:
                 del inputs["token_type_ids"]
 
             if args.model_type in ["xlnet", "xlm"]:
@@ -329,7 +331,7 @@ def evaluate(args, model, tokenizer, prefix=""):
                 "token_type_ids": batch[2],
             }
 
-            if args.model_type in ["xlm", "roberta", "distilbert", "camembert", "bart", "longformer"]:
+            if args.model_type in ["xlm", "roberta", "distilbert", "camembert", "bart", "longformer", "modernbert"]:
                 del inputs["token_type_ids"]
 
             feature_indices = batch[3]
@@ -763,7 +765,8 @@ def main():
                     os.path.dirname(c)
                     for c in sorted(glob.glob(args.output_dir + "/**/" + WEIGHTS_NAME, recursive=True))
                 )
-            checkpoints = [c for c in checkpoints if 'checkpoint' in c]
+            if args.eval_all_checkpoints:
+                checkpoints = [c for c in checkpoints if "checkpoint" in c]
         else:
             logger.info("Loading checkpoint %s for evaluation", args.model_name_or_path)
             checkpoints = [args.model_name_or_path]
@@ -788,4 +791,17 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    start_time = time.time()
+    try:
+        results = main()
+    finally:
+        elapsed = time.time() - start_time
+        elapsed = int(time.time() - start_time)
+
+        hours = elapsed // 3600
+        minutes = (elapsed % 3600) // 60
+        seconds = elapsed % 60
+
+        print("\n" + "=" * 60)
+        print(f"Total runtime: {hours:02d}:{minutes:02d}:{seconds:02d}")
+        print("=" * 60)

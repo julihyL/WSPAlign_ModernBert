@@ -21,11 +21,16 @@ import logging
 import numpy as np
 from tqdm import tqdm
 
-from transformers.models.bert.tokenization_bert import whitespace_tokenize
 from transformers.tokenization_utils_base import BatchEncoding, PreTrainedTokenizerBase, TruncationStrategy
 # from transformers.utils import is_tf_available, is_torch_available, logging
 from transformers.data.processors.utils import DataProcessor
 
+def whitespace_tokenize(text):
+    """Split text on whitespace, matching the legacy Transformers helper."""
+    text = text.strip()
+    if not text:
+        return []
+    return text.split()
 
 # Store the tokenizers which insert 2 separators tokens
 MULTI_SEP_TOKENS_TOKENIZERS_SET = {"roberta", "camembert", "bart", "mpnet", "xlmroberta"}
@@ -179,6 +184,8 @@ def squad_convert_example_to_features(
     truncated_query = tokenizer.encode(
         example.question_text, add_special_tokens=False, truncation=True, max_length=max_query_length
     )
+    
+    truncated_query_tokens = tokenizer.convert_ids_to_tokens(truncated_query)
 
     # Tokenizers who insert 2 SEP tokens in-between <context> & <question> need to have special handling
     # in the way they compute mask of added tokens.
@@ -192,67 +199,106 @@ def squad_convert_example_to_features(
 
     span_doc_tokens = all_doc_tokens
     while len(spans) * doc_stride < len(all_doc_tokens):
+        doc_start = len(spans) * doc_stride
 
-        # Define the side we want to truncate / pad and the text/pair sorting
+        max_tokens_for_doc = (
+            max_seq_length
+            - len(truncated_query)
+            - sequence_pair_added_tokens
+        )
+
+        paragraph_len = min(
+            len(all_doc_tokens) - doc_start,
+            max_tokens_for_doc,
+        )
+
+        span_doc_tokens = all_doc_tokens[
+            doc_start : doc_start + paragraph_len
+        ]
+
+        # Define sequence order and truncation side.
         if tokenizer.padding_side == "right":
-            texts = truncated_query
+            texts = truncated_query_tokens
             pairs = span_doc_tokens
             truncation = TruncationStrategy.ONLY_SECOND.value
         else:
             texts = span_doc_tokens
-            pairs = truncated_query
+            pairs = truncated_query_tokens
             truncation = TruncationStrategy.ONLY_FIRST.value
 
-        encoded_dict = tokenizer.encode_plus(  # TODO(thom) update this logic
+        encoded_dict = tokenizer(
             texts,
             pairs,
+            is_split_into_words=True,
             truncation=truncation,
             padding=padding_strategy,
             max_length=max_seq_length,
-            return_overflowing_tokens=True,
-            stride=max_seq_length - doc_stride - len(truncated_query) - sequence_pair_added_tokens,
+            return_attention_mask=True,
             return_token_type_ids=True,
         )
 
-        paragraph_len = min(
-            len(all_doc_tokens) - len(spans) * doc_stride,
-            max_seq_length - len(truncated_query) - sequence_pair_added_tokens,
-        )
+        # ModernBERT does not use token_type_ids, but the legacy
+        # feature conversion code still expects this field.
+        if "token_type_ids" not in encoded_dict:
+            encoded_dict["token_type_ids"] = [
+                0
+            ] * len(encoded_dict["input_ids"])
 
         if tokenizer.pad_token_id in encoded_dict["input_ids"]:
             if tokenizer.padding_side == "right":
-                non_padded_ids = encoded_dict["input_ids"][: encoded_dict["input_ids"].index(tokenizer.pad_token_id)]
+                first_padding_position = encoded_dict["input_ids"].index(
+                    tokenizer.pad_token_id
+                )
+                non_padded_ids = encoded_dict["input_ids"][
+                    :first_padding_position
+                ]
             else:
                 last_padding_id_position = (
-                    len(encoded_dict["input_ids"]) - 1 - encoded_dict["input_ids"][::-1].index(tokenizer.pad_token_id)
+                    len(encoded_dict["input_ids"])
+                    - 1
+                    - encoded_dict["input_ids"][::-1].index(
+                        tokenizer.pad_token_id
+                    )
                 )
-                non_padded_ids = encoded_dict["input_ids"][last_padding_id_position + 1 :]
-
+                non_padded_ids = encoded_dict["input_ids"][
+                    last_padding_id_position + 1 :
+                ]
         else:
             non_padded_ids = encoded_dict["input_ids"]
 
         tokens = tokenizer.convert_ids_to_tokens(non_padded_ids)
 
         token_to_orig_map = {}
+
         for i in range(paragraph_len):
-            index = len(truncated_query) + sequence_added_tokens + i if tokenizer.padding_side == "right" else i
-            token_to_orig_map[index] = tok_to_orig_index[len(spans) * doc_stride + i]
+            if tokenizer.padding_side == "right":
+                index = (
+                    len(truncated_query)
+                    + sequence_added_tokens
+                    + i
+                )
+            else:
+                index = i
+
+            token_to_orig_map[index] = tok_to_orig_index[
+                doc_start + i
+            ]
 
         encoded_dict["paragraph_len"] = paragraph_len
         encoded_dict["tokens"] = tokens
         encoded_dict["token_to_orig_map"] = token_to_orig_map
-        encoded_dict["truncated_query_with_special_tokens_length"] = len(truncated_query) + sequence_added_tokens
+        encoded_dict[
+            "truncated_query_with_special_tokens_length"
+        ] = len(truncated_query) + sequence_added_tokens
         encoded_dict["token_is_max_context"] = {}
-        encoded_dict["start"] = len(spans) * doc_stride
+        encoded_dict["start"] = doc_start
         encoded_dict["length"] = paragraph_len
 
         spans.append(encoded_dict)
 
-        if "overflowing_tokens" not in encoded_dict or (
-            "overflowing_tokens" in encoded_dict and len(encoded_dict["overflowing_tokens"]) == 0
-        ):
+        # Stop when the current span reaches the end of the document.
+        if doc_start + paragraph_len >= len(all_doc_tokens):
             break
-        span_doc_tokens = encoded_dict["overflowing_tokens"]
 
     for doc_span_index in range(len(spans)):
         for j in range(spans[doc_span_index]["paragraph_len"]):
@@ -270,16 +316,22 @@ def squad_convert_example_to_features(
 
         # p_mask: mask with 1 for token than cannot be in the answer (0 for token which can be in an answer)
         # Original TF implementation also keep the classification token (set to 0)
-        p_mask = np.ones_like(span["token_type_ids"])
+        p_mask = np.ones_like(np.asarray(span["token_type_ids"]))
         if tokenizer.padding_side == "right":
             p_mask[len(truncated_query) + sequence_added_tokens :] = 0
         else:
             p_mask[-len(span["tokens"]) : -(len(truncated_query) + sequence_added_tokens)] = 0
 
-        pad_token_indices = np.where(span["input_ids"] == tokenizer.pad_token_id)
-        special_token_indices = np.asarray(
-            tokenizer.get_special_tokens_mask(span["input_ids"], already_has_special_tokens=True)
-        ).nonzero()
+        pad_token_indices = np.where(np.asarray(span["input_ids"]) == tokenizer.pad_token_id)
+
+        special_token_mask = np.asarray(
+            tokenizer.get_special_tokens_mask(
+                list(span["input_ids"]),
+                already_has_special_tokens=True,
+            )
+        )
+
+        special_token_indices = np.where(special_token_mask)
 
         p_mask[pad_token_indices] = 1
         p_mask[special_token_indices] = 1

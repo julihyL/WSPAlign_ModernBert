@@ -39,6 +39,8 @@ def load_and_cache_examples(args, tokenizer, evaluate=False):
 
     # Load data features from cache or dataset file
     input_dir = args.data_dir if args.data_dir else "."
+    os.makedirs(input_dir, exist_ok=True)
+
     cached_features_file = os.path.join(
         input_dir,
         "cached_{}_{}_{}".format(
@@ -321,7 +323,7 @@ class CacheDataReader():
         return self.dataset_group.attrs["size"]
 
     def load_examples(self):
-        examples = torch.load(self.examples_file)
+        examples = torch.load(self.examples_file, weights_only=False)
         return examples
 
     def get_features(self):

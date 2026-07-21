@@ -4,3 +4,6 @@
 **/post_evaluate/*.json
 *.bidi_th
 .vscode
+.venv/
+experiments/
+*.pyc
