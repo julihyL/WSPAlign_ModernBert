@@ -1,33 +1,57 @@
 #!/bin/bash
 
-PROJECT_DIR=wspalign
+# Stop immediately when a command fails.
+# pipefail ensures that a Python error is not hidden by `tee`.
+set -euo pipefail
 
-EXPERIMENT_DIR=experiments
-OUTPUT_DIR=$EXPERIMENT_DIR/pretraining_small
+# Always run from the repository root, regardless of where the script is called.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
 
-DATA_DIR=data/pt_data
-TRAIN_FILE=$DATA_DIR/train-6langs-small.json
-DEV_FILE=$DATA_DIR/kftt_dev-small.json
+PROJECT_DIR="wspalign"
 
-MODEL_TYPE=modernbert
-MODEL_NAME=answerdotai/ModernBERT-base
+EXPERIMENT_DIR="experiments"
+OUTPUT_DIR="$EXPERIMENT_DIR/pretraining_small"
+LOG_FILE="$EXPERIMENT_DIR/pretraining_small.log"
+
+DATA_DIR="data/pt_data"
+TRAIN_FILE="$DATA_DIR/train-6langs-small.json"
+DEV_FILE="$DATA_DIR/kftt_dev-small.json"
+
+MODEL_TYPE="modernbert"
+MODEL_NAME="answerdotai/ModernBERT-base"
 
 date
 hostname
-echo $EXPERIMENT_DIR
+echo "Experiment directory: $EXPERIMENT_DIR"
 
 echo ""
 echo "### Small pretraining ###"
 
 mkdir -p "$OUTPUT_DIR"
 
-python $PROJECT_DIR/run_spanpred.py \
-    --model_type $MODEL_TYPE \
-    --model_name_or_path $MODEL_NAME \
+# Delete old feature caches before every run.
+# This does not delete model checkpoints or prediction results.
+echo ""
+echo "Removing old feature caches from $OUTPUT_DIR ..."
+
+find "$OUTPUT_DIR" \
+    -maxdepth 1 \
+    -type f \
+    -name 'cached_*' \
+    -print \
+    -delete
+
+echo "Cache cleanup completed."
+echo ""
+
+python "$PROJECT_DIR/run_spanpred.py" \
+    --model_type "$MODEL_TYPE" \
+    --model_name_or_path "$MODEL_NAME" \
     --do_train \
     --do_eval \
-    --train_file $TRAIN_FILE \
-    --predict_file $DEV_FILE \
+    --train_file "$TRAIN_FILE" \
+    --predict_file "$DEV_FILE" \
     --learning_rate 1e-6 \
     --per_gpu_train_batch_size 2 \
     --per_gpu_eval_batch_size 2 \
@@ -37,12 +61,13 @@ python $PROJECT_DIR/run_spanpred.py \
     --max_answer_length 158 \
     --doc_stride 64 \
     --n_best_size 10 \
-    --data_dir $OUTPUT_DIR \
-    --output_dir $OUTPUT_DIR \
+    --data_dir "$OUTPUT_DIR" \
+    --output_dir "$OUTPUT_DIR" \
     --overwrite_output_dir \
+    --overwrite_cache \
     --save_steps 100000 \
     --logging_steps 10 \
-    --thread 4 \
+    --threads 4 \
     --version_2_with_negative \
-    --warmup_step 0 \
-    2>&1 | tee $EXPERIMENT_DIR/pretraining_small.log
+    --warmup_steps 0 \
+    2>&1 | tee "$LOG_FILE"
