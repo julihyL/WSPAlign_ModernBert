@@ -247,16 +247,60 @@ def squad_convert_example_to_features(
                 f"max_seq_length={max_seq_length}"
             )
 
-        encoded_dict = tokenizer.prepare_for_model(
-            text_ids,
-            pair_ids=pair_ids,
-            add_special_tokens=True,
-            padding=padding_strategy,
-            truncation=False,
-            max_length=max_seq_length,
-            return_attention_mask=True,
-            return_token_type_ids=False,
+        # Transformers v5 TokenizersBackend no longer provides
+        # prepare_for_model(). ModernBERT uses:
+        # [CLS] query [SEP] context [SEP]
+        if tokenizer.padding_side != "right":
+            raise ValueError(
+                "This ModernBERT feature conversion currently expects "
+                "right-side padding."
+            )
+
+        if (
+            tokenizer.cls_token_id is None
+            or tokenizer.sep_token_id is None
+            or tokenizer.pad_token_id is None
+        ):
+            raise ValueError(
+                "ModernBERT tokenizer must define CLS, SEP, and PAD tokens."
+            )
+
+        if sequence_pair_added_tokens != 3:
+            raise ValueError(
+                f"Expected ModernBERT to add 3 special tokens for a pair, "
+                f"but tokenizer reports {sequence_pair_added_tokens}."
+            )
+
+        input_ids = (
+            [tokenizer.cls_token_id]
+            + text_ids
+            + [tokenizer.sep_token_id]
+            + pair_ids
+            + [tokenizer.sep_token_id]
         )
+
+        if len(input_ids) != expected_length:
+            raise ValueError(
+                f"Special-token length mismatch for qas_id={example.qas_id}: "
+                f"constructed={len(input_ids)}, "
+                f"expected={expected_length}"
+            )
+
+        attention_mask = [1] * len(input_ids)
+
+        if padding_strategy == "max_length":
+            padding_length = max_seq_length - len(input_ids)
+
+            input_ids += [
+                tokenizer.pad_token_id
+            ] * padding_length
+
+            attention_mask += [0] * padding_length
+
+        encoded_dict = {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+        }
 
         # ModernBERT does not use token_type_ids, but the legacy
         # feature conversion code still expects this field.
