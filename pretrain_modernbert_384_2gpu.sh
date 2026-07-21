@@ -12,7 +12,7 @@ EXPERIMENT_DIR="experiments"
 OUTPUT_DIR="$EXPERIMENT_DIR/modernbert_384_10epochs_2gpu"
 LOG_FILE="$EXPERIMENT_DIR/modernbert_384_10epochs_2gpu.log"
 
-DATA_DIR="data"
+DATA_DIR="data/pt_data"
 TRAIN_FILE="$DATA_DIR/train-6langs.json"
 DEV_FILE="$DATA_DIR/kftt_dev.json"
 
@@ -26,10 +26,16 @@ BASE_MODEL="answerdotai/ModernBERT-base"
 GPU_IDS="${GPU_IDS:-4,5}"
 export CUDA_VISIBLE_DEVICES="$GPU_IDS"
 
-# Default effective batch size:
+# Effective batch size:
 # 4 samples per GPU × 2 GPUs × 16 accumulation steps = 128
 PER_GPU_BATCH_SIZE="${PER_GPU_BATCH_SIZE:-4}"
 GRADIENT_ACCUMULATION_STEPS="${GRADIENT_ACCUMULATION_STEPS:-16}"
+
+LEARNING_RATE="${LEARNING_RATE:-1e-6}"
+NUM_EPOCHS="${NUM_EPOCHS:-10}"
+WARMUP_STEPS="${WARMUP_STEPS:-2000}"
+SAVE_STEPS="${SAVE_STEPS:-500}"
+LOGGING_STEPS="${LOGGING_STEPS:-50}"
 
 mkdir -p "$EXPERIMENT_DIR"
 mkdir -p "$OUTPUT_DIR"
@@ -47,15 +53,18 @@ echo "Physical GPUs: $GPU_IDS"
 echo "Per-GPU batch size: $PER_GPU_BATCH_SIZE"
 echo "Gradient accumulation steps: $GRADIENT_ACCUMULATION_STEPS"
 echo "Effective batch size: $((PER_GPU_BATCH_SIZE * 2 * GRADIENT_ACCUMULATION_STEPS))"
-echo "Number of epochs: 10"
+echo "Number of epochs: $NUM_EPOCHS"
+echo "Learning rate: $LEARNING_RATE"
+echo "Warmup steps: $WARMUP_STEPS"
 echo "============================================================"
 
-# Stop immediately if either dataset file is missing.
+# Stop immediately if the training dataset is missing.
 if [[ ! -f "$TRAIN_FILE" ]]; then
     echo "ERROR: Training file not found: $TRAIN_FILE" >&2
     exit 1
 fi
 
+# Stop immediately if the development dataset is missing.
 if [[ ! -f "$DEV_FILE" ]]; then
     echo "ERROR: Development file not found: $DEV_FILE" >&2
     exit 1
@@ -130,7 +139,9 @@ PY
     echo "Model source: $MODEL_SOURCE"
     echo "Physical GPUs: $GPU_IDS"
     echo "Maximum sequence length: 384"
-    echo "Number of epochs: 10"
+    echo "Number of epochs: $NUM_EPOCHS"
+    echo "Per-GPU batch size: $PER_GPU_BATCH_SIZE"
+    echo "Gradient accumulation steps: $GRADIENT_ACCUMULATION_STEPS"
     echo "============================================================"
 } | tee -a "$LOG_FILE"
 
@@ -141,11 +152,11 @@ python "$PROJECT_DIR/run_spanpred.py" \
     --do_eval \
     --train_file "$TRAIN_FILE" \
     --predict_file "$DEV_FILE" \
-    --learning_rate 1e-6 \
+    --learning_rate "$LEARNING_RATE" \
     --per_gpu_train_batch_size "$PER_GPU_BATCH_SIZE" \
     --per_gpu_eval_batch_size 8 \
     --gradient_accumulation_steps "$GRADIENT_ACCUMULATION_STEPS" \
-    --num_train_epochs 10 \
+    --num_train_epochs "$NUM_EPOCHS" \
     --max_seq_length 384 \
     --max_query_length 158 \
     --max_answer_length 158 \
@@ -154,9 +165,9 @@ python "$PROJECT_DIR/run_spanpred.py" \
     --data_dir "$OUTPUT_DIR" \
     --output_dir "$OUTPUT_DIR" \
     --overwrite_output_dir \
-    --save_steps 500 \
-    --logging_steps 50 \
-    --threads 1 \
+    --save_steps "$SAVE_STEPS" \
+    --logging_steps "$LOGGING_STEPS" \
+    --threads 4 \
     --version_2_with_negative \
-    --warmup_steps 2000 \
+    --warmup_steps "$WARMUP_STEPS" \
     2>&1 | tee -a "$LOG_FILE"
