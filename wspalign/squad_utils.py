@@ -190,12 +190,12 @@ def squad_convert_example_to_features(
     # Tokenizers who insert 2 SEP tokens in-between <context> & <question> need to have special handling
     # in the way they compute mask of added tokens.
     tokenizer_type = type(tokenizer).__name__.replace("Tokenizer", "").lower()
-    sequence_added_tokens = (
-        tokenizer.model_max_length - tokenizer.max_len_single_sentence + 1
-        if tokenizer_type in MULTI_SEP_TOKENS_TOKENIZERS_SET
-        else tokenizer.model_max_length - tokenizer.max_len_single_sentence
+    sequence_added_tokens = tokenizer.num_special_tokens_to_add(
+        pair=False
     )
-    sequence_pair_added_tokens = tokenizer.model_max_length - tokenizer.max_len_sentences_pair
+    sequence_pair_added_tokens = tokenizer.num_special_tokens_to_add(
+        pair=True
+    )
 
     span_doc_tokens = all_doc_tokens
     while len(spans) * doc_stride < len(all_doc_tokens):
@@ -226,16 +226,90 @@ def squad_convert_example_to_features(
             pairs = truncated_query_tokens
             truncation = TruncationStrategy.ONLY_FIRST.value
 
-        encoded_dict = tokenizer(
-            texts,
-            pairs,
-            is_split_into_words=True,
-            truncation=truncation,
-            padding=padding_strategy,
-            max_length=max_seq_length,
-            return_attention_mask=True,
-            return_token_type_ids=True,
-        )
+        try:
+            encoded_dict = tokenizer(
+                texts,
+                pairs,
+                is_split_into_words=True,
+                truncation=truncation,
+                padding=padding_strategy,
+                max_length=max_seq_length,
+                return_attention_mask=True,
+                return_token_type_ids=True,
+            )
+
+        except Exception as exc:
+            print("\n" + "=" * 80, flush=True)
+            print("TOKENIZATION ERROR", flush=True)
+            print(f"exception: {repr(exc)}", flush=True)
+            print(f"qas_id: {example.qas_id}", flush=True)
+            print(f"tokenizer: {tokenizer.__class__.__name__}", flush=True)
+            print(f"padding_side: {tokenizer.padding_side}", flush=True)
+            print(f"truncation: {truncation}", flush=True)
+
+            print(f"max_seq_length: {max_seq_length}", flush=True)
+            print(f"max_query_length: {max_query_length}", flush=True)
+            print(f"query_ids_length: {len(truncated_query)}", flush=True)
+            print(f"texts_length: {len(texts)}", flush=True)
+            print(f"pairs_length: {len(pairs)}", flush=True)
+            print(f"all_doc_tokens_length: {len(all_doc_tokens)}", flush=True)
+            print(f"doc_start: {doc_start}", flush=True)
+            print(f"paragraph_len: {paragraph_len}", flush=True)
+            print(f"max_tokens_for_doc: {max_tokens_for_doc}", flush=True)
+
+            print(
+                f"sequence_added_tokens: {sequence_added_tokens}",
+                flush=True,
+            )
+            print(
+                f"sequence_pair_added_tokens: "
+                f"{sequence_pair_added_tokens}",
+                flush=True,
+            )
+
+            expected_length = (
+                len(texts)
+                + len(pairs)
+                + sequence_pair_added_tokens
+            )
+            print(
+                f"expected_length_before_retokenization: "
+                f"{expected_length}",
+                flush=True,
+            )
+
+            # Encode once without truncation to see the actual resulting length.
+            try:
+                debug_encoding = tokenizer(
+                    texts,
+                    pairs,
+                    is_split_into_words=True,
+                    truncation=False,
+                    padding=False,
+                    add_special_tokens=True,
+                    return_attention_mask=False,
+                    return_token_type_ids=False,
+                )
+
+                print(
+                    f"actual_encoded_length_without_truncation: "
+                    f"{len(debug_encoding['input_ids'])}",
+                    flush=True,
+                )
+            except Exception as debug_exc:
+                print(
+                    f"debug encoding also failed: {repr(debug_exc)}",
+                    flush=True,
+                )
+
+            print(
+                f"question_preview: "
+                f"{repr(example.question_text[:300])}",
+                flush=True,
+            )
+            print("=" * 80, flush=True)
+
+            raise 
 
         # ModernBERT does not use token_type_ids, but the legacy
         # feature conversion code still expects this field.
