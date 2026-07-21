@@ -41,12 +41,17 @@ def load_and_cache_examples(args, tokenizer, evaluate=False):
     input_dir = args.data_dir if args.data_dir else "."
     os.makedirs(input_dir, exist_ok=True)
 
+    cache_split = "dev" if evaluate else "train"
+    cache_model_id = args.model_type.lower()
+
     cached_features_file = os.path.join(
         input_dir,
-        "cached_{}_{}_{}".format(
-            "dev" if evaluate else "train",
-            list(filter(None, args.model_name_or_path.split("/"))).pop(),
-            str(args.max_seq_length),
+        (
+            f"cached_{cache_split}_"
+            f"{cache_model_id}_"
+            f"{args.max_seq_length}_"
+            f"{args.max_query_length}_"
+            f"{args.doc_stride}"
         ),
     )
 
